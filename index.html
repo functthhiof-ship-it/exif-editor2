@@ -1,0 +1,1418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>EXIF 编辑器 - 原图相机参数与定位修改器</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter & Noto Sans SC -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- piexifjs: 客户端读取与写入 JPEG EXIF 核心库 -->
+  <script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.min.js"></script>
+  <!-- Leaflet CSS & JS: 交互式地图选点 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- JSZip & FileSaver: 多图一键打包下载 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'Noto Sans SC', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+          },
+          colors: {
+            rose: {
+              50: '#fff1f5',
+              100: '#ffe4ec',
+              200: '#fecdd9',
+              300: '#fda4ba',
+              400: '#fb7196',
+              500: '#f43f72',
+              600: '#e11d58',
+            }
+          },
+          boxShadow: {
+            'soft': '0 4px 20px -2px rgba(244, 63, 114, 0.08)',
+            'card': '0 2px 12px rgba(0, 0, 0, 0.04)',
+            'pink-glow': '0 8px 20px -4px rgba(244, 63, 114, 0.35)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #f8f6f7;
+      color: #1f2937;
+      -webkit-tap-highlight-color: transparent;
+      padding-bottom: 96px;
+    }
+    /* 自定义滚动条隐藏（用于横向标签栏） */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    /* Leaflet 地图圆角与层级适配 */
+    #gps-map {
+      height: 220px;
+      width: 100%;
+      border-radius: 14px;
+      z-index: 10;
+    }
+    .leaflet-control-attribution {
+      font-size: 9px !important;
+      background: rgba(255,255,255,0.75) !important;
+    }
+    /* 柔和渐变按钮 */
+    .btn-pink-gradient {
+      background: linear-gradient(135deg, #ff6b95 0%, #f43f72 100%);
+    }
+    .btn-pink-gradient:active {
+      transform: scale(0.98);
+    }
+    /* 平滑折叠动画 */
+    .accordion-content {
+      transition: all 0.25s ease-in-out;
+    }
+  </style>
+</head>
+<body class="antialiased selection:bg-rose-200 selection:text-rose-900">
+
+  <!-- 顶部导航栏 -->
+  <header class="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-rose-100/80">
+    <div class="max-w-lg mx-auto px-4 h-14 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 rounded-xl btn-pink-gradient flex items-center justify-center text-white shadow-sm">
+          <i data-lucide="camera" class="w-4 h-4"></i>
+        </div>
+        <h1 class="text-lg font-bold tracking-tight text-rose-500">EXIF 编辑器</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-50 text-rose-600 border border-rose-200/70">
+          <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+          纯本地处理
+        </span>
+        <button onclick="resetAllSettings()" title="重置默认参数" class="w-8 h-8 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center hover:bg-rose-100 transition">
+          <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主体容器（移动端优先居中适配） -->
+  <main class="max-w-lg mx-auto px-3.5 pt-3.5 space-y-3.5">
+
+    <!-- 1. 三步操作指示条 -->
+    <section class="bg-white rounded-2xl p-3.5 shadow-card border border-rose-100/60">
+      <div class="flex items-center justify-between text-xs font-medium">
+        <div id="step-1-badge" class="flex items-center gap-1.5 text-rose-600 font-semibold">
+          <span class="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center text-[11px] font-bold">1</span>
+          <span>上传文件</span>
+        </div>
+        <div class="h-[1px] flex-1 bg-rose-200 mx-2"></div>
+        <div id="step-2-badge" class="flex items-center gap-1.5 text-gray-500">
+          <span class="w-5 h-5 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-[11px] font-bold">2</span>
+          <span>选模板/填写</span>
+        </div>
+        <div class="h-[1px] flex-1 bg-rose-200 mx-2"></div>
+        <div id="step-3-badge" class="flex items-center gap-1.5 text-gray-500">
+          <span class="w-5 h-5 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-[11px] font-bold">3</span>
+          <span>导出下载</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. 图片上传与预览卡片 -->
+    <section class="bg-white rounded-2xl p-4 shadow-card border border-rose-100/60">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-bold text-gray-800" id="file-count-title">请选择需要修改的图片</span>
+          <span class="text-[11px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">支持批量</span>
+        </div>
+        <button onclick="triggerFileSelect()" class="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 text-xs font-semibold hover:bg-rose-100 active:scale-95 transition flex items-center gap-1">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+          添加图片
+        </button>
+        <input type="file" id="file-input" accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp" multiple class="hidden" onchange="handleFilesSelect(event)" />
+      </div>
+
+      <!-- 空状态拖拽上传框 -->
+      <div id="drop-zone" onclick="triggerFileSelect()" class="border-2 border-dashed border-rose-200 bg-rose-50/40 hover:bg-rose-50/80 rounded-2xl p-6 text-center cursor-pointer transition select-none">
+        <div class="w-12 h-12 rounded-2xl bg-white text-rose-500 shadow-sm flex items-center justify-center mx-auto mb-2.5 pointer-events-none">
+          <i data-lucide="image-plus" class="w-6 h-6"></i>
+        </div>
+        <p class="text-sm font-semibold text-gray-700 pointer-events-none">点击选择或拖拽图片到这里</p>
+        <p class="text-xs text-gray-400 mt-1 pointer-events-none">自动将 PNG / WebP / 相册原图转为支持 EXIF 的高清 JPEG</p>
+      </div>
+
+      <!-- 已上传图片缩略图网格 -->
+      <div id="preview-grid" class="hidden grid grid-cols-3 gap-2.5 mt-1"></div>
+    </section>
+
+    <!-- 3. 设备预设模板库 -->
+    <section class="bg-white rounded-2xl p-4 shadow-card border border-rose-100/60">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-1.5">
+          <i data-lucide="smartphone" class="w-4 h-4 text-rose-500"></i>
+          <h2 class="text-sm font-bold text-gray-800">设备预设</h2>
+        </div>
+        <span id="current-preset-label" class="text-xs text-rose-500 font-medium bg-rose-50 px-2.5 py-0.5 rounded-full">
+          iPhone 17 Pro Max
+        </span>
+      </div>
+
+      <!-- 品牌横向滚动 Tab -->
+      <div id="brand-tabs" class="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2 mb-2.5">
+        <!-- 由 JS 动态渲染 -->
+      </div>
+
+      <!-- 机型实时搜索框与快捷筛选芯片 -->
+      <div class="mb-2.5 space-y-2">
+        <div class="relative">
+          <i data-lucide="search" class="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+          <input
+            type="text"
+            id="model-search-input"
+            placeholder="搜索机型，如：18 Pro、17、Air、13 mini、XR..."
+            oninput="handleModelSearch(this.value)"
+            class="w-full pl-8 pr-8 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-xs text-gray-800 placeholder:text-gray-400 focus:outline-none focus:border-rose-500 focus:bg-white transition"
+          />
+          <button
+            id="model-search-clear"
+            onclick="clearModelSearch()"
+            class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center hover:bg-gray-300"
+          >
+            <i data-lucide="x" class="w-2.5 h-2.5"></i>
+          </button>
+        </div>
+
+        <!-- 快捷筛选标签（按当前品牌动态更新） -->
+        <div id="model-quick-filters" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          <!-- 由 JS 动态渲染 -->
+        </div>
+      </div>
+
+      <!-- 机型网格 -->
+      <div id="model-grid" class="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-0.5">
+        <!-- 由 JS 动态渲染 -->
+      </div>
+
+      <!-- 新手模式 / 高级模式 切换条 -->
+      <div class="mt-4 pt-3 border-t border-gray-100">
+        <div class="grid grid-cols-2 bg-rose-50/80 p-1 rounded-xl">
+          <button id="mode-basic-btn" onclick="setEditorMode('basic')" class="py-1.5 text-xs font-semibold rounded-lg btn-pink-gradient text-white shadow-sm transition">
+            新手模式
+          </button>
+          <button id="mode-adv-btn" onclick="setEditorMode('advanced')" class="py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:text-rose-600 transition">
+            高级模式 (光圈/ISO/快门)
+          </button>
+        </div>
+      </div>
+
+      <!-- 镜头快捷选择 -->
+      <div class="mt-3.5">
+        <p class="text-xs font-semibold text-gray-500 mb-2">镜头快捷选择</p>
+        <div id="lens-quick-grid" class="grid grid-cols-2 gap-2">
+          <!-- 由 JS 动态渲染 -->
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 参数自定义折叠面板组 -->
+
+    <!-- 4.1 时间设置 -->
+    <section class="bg-white rounded-2xl shadow-card border border-rose-100/60 overflow-hidden">
+      <button onclick="toggleSection('time-body', 'time-chevron')" class="w-full px-4 py-3.5 flex items-center justify-between text-left">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center">
+            <i data-lucide="clock" class="w-3.5 h-3.5"></i>
+          </span>
+          <span class="text-sm font-bold text-gray-800">时间设置</span>
+        </div>
+        <i id="time-chevron" data-lucide="chevron-up" class="w-4 h-4 text-gray-400 transition-transform"></i>
+      </button>
+      <div id="time-body" class="px-4 pb-4 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-medium text-gray-500">拍摄时间 (DateTimeOriginal)</label>
+          <button onclick="setCurrentDateTime()" class="text-xs text-rose-500 font-semibold hover:underline flex items-center gap-1">
+            <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+            设为当前时间
+          </button>
+        </div>
+        <input type="datetime-local" id="exif-datetime" step="1" class="w-full px-3.5 py-2.5 rounded-xl bg-rose-50/50 border border-rose-200 text-sm text-gray-800 font-medium focus:outline-none focus:border-rose-500 focus:bg-white transition" />
+      </div>
+    </section>
+
+    <!-- 4.2 镜头与焦距参数 -->
+    <section class="bg-white rounded-2xl shadow-card border border-rose-100/60 overflow-hidden">
+      <button onclick="toggleSection('lens-body', 'lens-chevron')" class="w-full px-4 py-3.5 flex items-center justify-between text-left">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center">
+            <i data-lucide="aperture" class="w-3.5 h-3.5"></i>
+          </span>
+          <span class="text-sm font-bold text-gray-800">镜头与焦距</span>
+        </div>
+        <i id="lens-chevron" data-lucide="chevron-up" class="w-4 h-4 text-gray-400 transition-transform"></i>
+      </button>
+      <div id="lens-body" class="px-4 pb-4 space-y-3">
+        <div class="grid grid-cols-2 gap-2.5">
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">设备厂商 (Make)</label>
+            <input type="text" id="exif-make" class="w-full px-3 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">设备型号 (Model)</label>
+            <input type="text" id="exif-model" class="w-full px-3 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">镜头型号 (LensModel)</label>
+          <input type="text" id="exif-lens-model" class="w-full px-3 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+        </div>
+
+        <div class="grid grid-cols-2 gap-2.5">
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">物理焦距 (mm)</label>
+            <input type="number" step="0.01" id="exif-focal" class="w-full px-3 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">35mm等效焦距 (mm)</label>
+            <input type="number" id="exif-focal-35" class="w-full px-3 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          </div>
+        </div>
+
+        <!-- 高级模式专属参数：光圈、ISO、快门 -->
+        <div id="advanced-fields" class="hidden pt-2 border-t border-dashed border-rose-200 grid grid-cols-3 gap-2">
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">光圈 (f/)</label>
+            <input type="number" step="0.01" id="exif-fnumber" value="1.78" class="w-full px-2.5 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">ISO 感光度</label>
+            <input type="number" id="exif-iso" value="100" class="w-full px-2.5 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">快门 (1/N秒)</label>
+            <input type="number" id="exif-shutter" value="120" class="w-full px-2.5 py-2 rounded-xl bg-rose-50/40 border border-rose-200/80 text-sm text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4.3 GPS 地理位置选点 -->
+    <section class="bg-white rounded-2xl shadow-card border border-rose-100/60 overflow-hidden">
+      <div class="px-4 py-3.5 flex items-center justify-between">
+        <button onclick="toggleSection('gps-body', 'gps-chevron')" class="flex items-center gap-2 text-left flex-1">
+          <span class="w-6 h-6 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center">
+            <i data-lucide="map-pin" class="w-3.5 h-3.5"></i>
+          </span>
+          <span class="text-sm font-bold text-gray-800">GPS 位置</span>
+        </button>
+        <div class="flex items-center gap-2.5">
+          <label class="inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="gps-enabled" checked class="sr-only peer" onchange="toggleGpsEnabled()">
+            <div class="relative w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
+            <span class="ms-1.5 text-xs font-medium text-gray-600" id="gps-status-text">写入定位</span>
+          </label>
+          <button onclick="toggleSection('gps-body', 'gps-chevron')">
+            <i id="gps-chevron" data-lucide="chevron-up" class="w-4 h-4 text-gray-400 transition-transform"></i>
+          </button>
+        </div>
+      </div>
+
+      <div id="gps-body" class="px-4 pb-4 space-y-3">
+        <!-- 地点搜索框（OpenStreetMap Nominatim 免费检索） -->
+        <div class="flex gap-2">
+          <input type="text" id="gps-search-input" placeholder="搜索地点，如：上海外滩、杭州西湖、东京塔" onkeydown="if(event.key==='Enter') searchLocation()" class="flex-1 px-3 py-2 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-800 focus:outline-none focus:border-rose-500 focus:bg-white" />
+          <button onclick="searchLocation()" id="gps-search-btn" class="px-4 py-2 rounded-xl btn-pink-gradient text-white text-xs font-semibold shadow-sm whitespace-nowrap">
+            搜索
+          </button>
+        </div>
+
+        <!-- 热门城市快捷标签 -->
+        <div id="city-pills" class="flex flex-wrap gap-1.5">
+          <!-- 由 JS 动态渲染 -->
+        </div>
+
+        <!-- 地图容器 -->
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[11px] text-gray-500">点击地图任意位置或拖动图钉拾取坐标</span>
+            <span id="selected-place-name" class="text-[11px] font-semibold text-rose-500">杭州 · 西湖风景名胜区</span>
+          </div>
+          <div id="gps-map" class="border border-rose-100 shadow-inner"></div>
+        </div>
+
+        <!-- 经纬度数值微调 -->
+        <div class="grid grid-cols-2 gap-2.5 pt-1">
+          <div>
+            <label class="block text-[11px] font-medium text-gray-500 mb-1">纬度 (Latitude)</label>
+            <input type="number" step="0.000001" id="gps-lat" value="30.243056" onchange="updateMapFromInputs()" class="w-full px-3 py-1.5 rounded-xl bg-rose-50/40 border border-rose-200/80 text-xs font-mono text-gray-800 focus:outline-none focus:border-rose-500" />
+          </div>
+          <div>
+            <label class="block text-[11px] font-medium text-gray-500 mb-1">经度 (Longitude)</label>
+            <input type="number" step="0.000001" id="gps-lng" value="120.148333" onchange="updateMapFromInputs()" class="w-full px-3 py-1.5 rounded-xl bg-rose-50/40 border border-rose-200/80 text-xs font-mono text-gray-800 focus:outline-none focus:border-rose-500" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 底部固定操作栏 -->
+  <footer class="fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-rose-100 px-4 py-3">
+    <div class="max-w-lg mx-auto flex items-center gap-3">
+      <button onclick="clearAllFiles()" class="w-1/3 py-3 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold text-sm flex items-center justify-center gap-1.5 active:scale-95 transition">
+        <i data-lucide="x" class="w-4 h-4"></i>
+        清空
+      </button>
+      <button onclick="processAndExport()" id="export-btn" class="w-2/3 py-3 rounded-2xl btn-pink-gradient text-white font-bold text-sm shadow-pink-glow flex items-center justify-center gap-2 transition">
+        <i data-lucide="download" class="w-4 h-4"></i>
+        <span id="export-btn-text">导出图片</span>
+      </button>
+    </div>
+  </footer>
+
+  <!-- 轻提示 Toast -->
+  <div id="toast-box" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 pointer-events-none opacity-0 transition-opacity duration-200">
+    <div id="toast-msg" class="px-4 py-2 rounded-full bg-gray-900/90 text-white text-xs font-medium shadow-lg backdrop-blur-sm"></div>
+  </div>
+
+  <!-- 导出结果弹窗 Modal -->
+  <div id="export-modal" class="fixed inset-0 z-50 hidden bg-black/50 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden animate-slide-up">
+      <!-- 弹窗顶部 -->
+      <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+          <h3 class="text-base font-bold text-gray-800">下载列表 (<span id="modal-count">0</span>张)</h3>
+        </div>
+        <button onclick="closeExportModal()" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center hover:bg-gray-200">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- iOS 保存提示横幅 -->
+      <div class="mx-4 mt-3 px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-200/80 flex items-start gap-2">
+        <i data-lucide="info" class="w-4 h-4 text-rose-500 shrink-0 mt-0.5"></i>
+        <p class="text-xs text-rose-700 leading-relaxed">
+          <span class="font-bold">苹果 iPhone 用户提示：</span>长按下方生成的图片 → 选择<span class="font-bold">“添加到‘照片’”</span>（或存储到“照片”），即可在系统相册中完整显示机型、镜头与地图定位！
+        </p>
+      </div>
+
+      <!-- 生成结果列表 -->
+      <div id="export-list" class="p-4 overflow-y-auto space-y-4 flex-1">
+        <!-- 由 JS 动态渲染 -->
+      </div>
+
+      <!-- 弹窗底部一键打包按钮 -->
+      <div class="p-4 border-t border-gray-100 bg-gray-50/80">
+        <button onclick="downloadAllAsZip()" id="zip-download-btn" class="w-full py-3 rounded-2xl btn-pink-gradient text-white font-bold text-sm shadow-pink-glow flex items-center justify-center gap-2">
+          <i data-lucide="archive" class="w-4 h-4"></i>
+          全部打包下载 (.ZIP)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==========================================
+    // 1. 预设设备与镜头数据库（全系列补全 + 标准英文 LensModel）
+    // ==========================================
+    const DEVICE_PRESETS = {
+      Apple: {
+        make: 'Apple',
+        lensMake: 'Apple',
+        quickFilters: ['全部', '18系', '17系', 'Air', '16系', '15系', '14系', '13系', '12系', '11系', 'XS/XR/X', 'iPad'],
+        models: [
+          // iPhone 18 系列
+          { name: 'iPhone 18 Pro Max', tag: '18系', main: { focal: 6.86, eq: 24, f: 1.48, label: 'back camera 6.86mm f/1.48' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 14.2, eq: 100, f: 2.8, label: 'back telephoto camera 14.2mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 18 Pro', tag: '18系', main: { focal: 6.86, eq: 24, f: 1.48, label: 'back camera 6.86mm f/1.48' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 14.2, eq: 100, f: 2.8, label: 'back telephoto camera 14.2mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+
+          // iPhone 17 & iPhone Air 系列
+          { name: 'iPhone 17 Pro Max', tag: '17系', main: { focal: 6.86, eq: 24, f: 1.78, label: 'back camera 6.86mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 14.2, eq: 100, f: 2.8, label: 'back telephoto camera 14.2mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 17 Pro', tag: '17系', main: { focal: 6.86, eq: 24, f: 1.78, label: 'back camera 6.86mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 14.2, eq: 100, f: 2.8, label: 'back telephoto camera 14.2mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 17', tag: '17系', main: { focal: 5.96, eq: 26, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 5.96, eq: 52, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone Air', tag: 'Air', main: { focal: 5.96, eq: 26, f: 1.6, label: 'back camera 5.96mm f/1.6' }, wide: { focal: 5.96, eq: 26, f: 1.6, label: 'back camera 5.96mm f/1.6' }, tele: { focal: 5.96, eq: 52, f: 1.6, label: 'back camera 5.96mm f/1.6' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+
+          // iPhone 16 系列
+          { name: 'iPhone 16 Pro Max', tag: '16系', main: { focal: 6.765, eq: 24, f: 1.78, label: 'back camera 6.765mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 15.66, eq: 120, f: 2.8, label: 'back telephoto camera 15.66mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 16 Pro', tag: '16系', main: { focal: 6.765, eq: 24, f: 1.78, label: 'back camera 6.765mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 15.66, eq: 120, f: 2.8, label: 'back telephoto camera 15.66mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 16 Plus', tag: '16系', main: { focal: 5.96, eq: 26, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 5.96, eq: 52, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 16', tag: '16系', main: { focal: 5.96, eq: 26, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 5.96, eq: 52, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 16e', tag: '16系', main: { focal: 5.96, eq: 26, f: 1.6, label: 'back camera 5.96mm f/1.6' }, wide: { focal: 5.96, eq: 26, f: 1.6, label: 'back camera 5.96mm f/1.6' }, tele: { focal: 5.96, eq: 52, f: 1.6, label: 'back camera 5.96mm f/1.6' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+
+          // iPhone 15 系列
+          { name: 'iPhone 15 Pro Max', tag: '15系', main: { focal: 6.765, eq: 24, f: 1.78, label: 'back camera 6.765mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 15.66, eq: 120, f: 2.8, label: 'back telephoto camera 15.66mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 15 Pro', tag: '15系', main: { focal: 6.765, eq: 24, f: 1.78, label: 'back camera 6.765mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 9.0, eq: 77, f: 2.8, label: 'back telephoto camera 9mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 15 Plus', tag: '15系', main: { focal: 5.96, eq: 26, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, wide: { focal: 2.22, eq: 13, f: 2.4, label: 'back ultra wide camera 2.22mm f/2.4' }, tele: { focal: 5.96, eq: 52, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 15', tag: '15系', main: { focal: 5.96, eq: 26, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, wide: { focal: 2.22, eq: 13, f: 2.4, label: 'back ultra wide camera 2.22mm f/2.4' }, tele: { focal: 5.96, eq: 52, f: 1.6, label: 'back dual wide camera 5.96mm f/1.6' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+
+          // iPhone 14 系列
+          { name: 'iPhone 14 Pro Max', tag: '14系', main: { focal: 6.86, eq: 24, f: 1.78, label: 'back camera 6.86mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 9.0, eq: 77, f: 2.8, label: 'back telephoto camera 9mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 14 Pro', tag: '14系', main: { focal: 6.86, eq: 24, f: 1.78, label: 'back camera 6.86mm f/1.78' }, wide: { focal: 2.22, eq: 13, f: 2.2, label: 'back ultra wide camera 2.22mm f/2.2' }, tele: { focal: 9.0, eq: 77, f: 2.8, label: 'back telephoto camera 9mm f/2.8' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 14 Plus', tag: '14系', main: { focal: 5.7, eq: 26, f: 1.5, label: 'back dual wide camera 5.7mm f/1.5' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 5.7, eq: 26, f: 1.5, label: 'back dual wide camera 5.7mm f/1.5' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+          { name: 'iPhone 14', tag: '14系', main: { focal: 5.7, eq: 26, f: 1.5, label: 'back dual wide camera 5.7mm f/1.5' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 5.7, eq: 26, f: 1.5, label: 'back dual wide camera 5.7mm f/1.5' }, front: { focal: 2.69, eq: 23, f: 1.9, label: 'TrueDepth front camera 2.69mm f/1.9' } },
+
+          // iPhone 13 系列
+          { name: 'iPhone 13 Pro Max', tag: '13系', main: { focal: 5.7, eq: 26, f: 1.5, label: 'back triple camera 5.7mm f/1.5' }, wide: { focal: 1.57, eq: 13, f: 1.8, label: 'back ultra wide camera 1.57mm f/1.8' }, tele: { focal: 9.0, eq: 77, f: 2.8, label: 'back telephoto camera 9mm f/2.8' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 13 Pro', tag: '13系', main: { focal: 5.7, eq: 26, f: 1.5, label: 'back triple camera 5.7mm f/1.5' }, wide: { focal: 1.57, eq: 13, f: 1.8, label: 'back ultra wide camera 1.57mm f/1.8' }, tele: { focal: 9.0, eq: 77, f: 2.8, label: 'back telephoto camera 9mm f/2.8' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 13', tag: '13系', main: { focal: 5.1, eq: 26, f: 1.6, label: 'back dual camera 5.1mm f/1.6' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 5.1, eq: 26, f: 1.6, label: 'back dual camera 5.1mm f/1.6' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 13 mini', tag: '13系', main: { focal: 5.1, eq: 26, f: 1.6, label: 'back dual camera 5.1mm f/1.6' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 5.1, eq: 26, f: 1.6, label: 'back dual camera 5.1mm f/1.6' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+
+          // iPhone 12 系列
+          { name: 'iPhone 12 Pro Max', tag: '12系', main: { focal: 5.1, eq: 26, f: 1.6, label: 'back triple camera 5.1mm f/1.6' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 7.5, eq: 65, f: 2.2, label: 'back telephoto camera 7.5mm f/2.2' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 12 Pro', tag: '12系', main: { focal: 4.2, eq: 26, f: 1.6, label: 'back triple camera 4.2mm f/1.6' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 6.0, eq: 52, f: 2.0, label: 'back telephoto camera 6mm f/2.0' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 12', tag: '12系', main: { focal: 4.2, eq: 26, f: 1.6, label: 'back dual camera 4.2mm f/1.6' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 4.2, eq: 26, f: 1.6, label: 'back dual camera 4.2mm f/1.6' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 12 mini', tag: '12系', main: { focal: 4.2, eq: 26, f: 1.6, label: 'back dual camera 4.2mm f/1.6' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 4.2, eq: 26, f: 1.6, label: 'back dual camera 4.2mm f/1.6' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+
+          // iPhone 11 系列
+          { name: 'iPhone 11 Pro Max', tag: '11系', main: { focal: 4.25, eq: 26, f: 1.8, label: 'back triple camera 4.25mm f/1.8' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 6.0, eq: 52, f: 2.0, label: 'back telephoto camera 6mm f/2.0' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 11 Pro', tag: '11系', main: { focal: 4.25, eq: 26, f: 1.8, label: 'back triple camera 4.25mm f/1.8' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 6.0, eq: 52, f: 2.0, label: 'back telephoto camera 6mm f/2.0' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+          { name: 'iPhone 11', tag: '11系', main: { focal: 4.25, eq: 26, f: 1.8, label: 'back dual camera 4.25mm f/1.8' }, wide: { focal: 1.54, eq: 13, f: 2.4, label: 'back ultra wide camera 1.54mm f/2.4' }, tele: { focal: 4.25, eq: 26, f: 1.8, label: 'back dual camera 4.25mm f/1.8' }, front: { focal: 2.71, eq: 23, f: 2.2, label: 'TrueDepth front camera 2.71mm f/2.2' } },
+
+          // iPhone XS / XR / X 系列
+          { name: 'iPhone XS Max', tag: 'XS/XR/X', main: { focal: 4.25, eq: 26, f: 1.8, label: 'back dual camera 4.25mm f/1.8' }, wide: { focal: 4.25, eq: 26, f: 1.8, label: 'back dual camera 4.25mm f/1.8' }, tele: { focal: 6.0, eq: 52, f: 2.4, label: 'back telephoto camera 6mm f/2.4' }, front: { focal: 2.87, eq: 32, f: 2.2, label: 'TrueDepth front camera 2.87mm f/2.2' } },
+          { name: 'iPhone XS', tag: 'XS/XR/X', main: { focal: 4.25, eq: 26, f: 1.8, label: 'back dual camera 4.25mm f/1.8' }, wide: { focal: 4.25, eq: 26, f: 1.8, label: 'back dual camera 4.25mm f/1.8' }, tele: { focal: 6.0, eq: 52, f: 2.4, label: 'back telephoto camera 6mm f/2.4' }, front: { focal: 2.87, eq: 32, f: 2.2, label: 'TrueDepth front camera 2.87mm f/2.2' } },
+          { name: 'iPhone XR', tag: 'XS/XR/X', main: { focal: 4.25, eq: 26, f: 1.8, label: 'back single camera 4.25mm f/1.8' }, wide: { focal: 4.25, eq: 26, f: 1.8, label: 'back single camera 4.25mm f/1.8' }, tele: { focal: 4.25, eq: 26, f: 1.8, label: 'back single camera 4.25mm f/1.8' }, front: { focal: 2.87, eq: 32, f: 2.2, label: 'TrueDepth front camera 2.87mm f/2.2' } },
+          { name: 'iPhone X', tag: 'XS/XR/X', main: { focal: 4.0, eq: 28, f: 1.8, label: 'back dual camera 4mm f/1.8' }, wide: { focal: 4.0, eq: 28, f: 1.8, label: 'back dual camera 4mm f/1.8' }, tele: { focal: 6.0, eq: 52, f: 2.4, label: 'back telephoto camera 6mm f/2.4' }, front: { focal: 2.87, eq: 32, f: 2.2, label: 'TrueDepth front camera 2.87mm f/2.2' } },
+
+          // iPad Pro M4
+          { name: 'iPad Pro 13" (M4)', tag: 'iPad', main: { focal: 3.3, eq: 29, f: 1.8, label: 'back camera 3.3mm f/1.8' }, wide: { focal: 3.3, eq: 29, f: 1.8, label: 'back camera 3.3mm f/1.8' }, tele: { focal: 3.3, eq: 29, f: 1.8, label: 'back camera 3.3mm f/1.8' }, front: { focal: 2.22, eq: 18, f: 2.0, label: 'TrueDepth front camera 2.22mm f/2.0' } },
+          { name: 'iPad Pro 11" (M4)', tag: 'iPad', main: { focal: 3.3, eq: 29, f: 1.8, label: 'back camera 3.3mm f/1.8' }, wide: { focal: 3.3, eq: 29, f: 1.8, label: 'back camera 3.3mm f/1.8' }, tele: { focal: 3.3, eq: 29, f: 1.8, label: 'back camera 3.3mm f/1.8' }, front: { focal: 2.22, eq: 18, f: 2.0, label: 'TrueDepth front camera 2.22mm f/2.0' } }
+        ]
+      },
+      vivo: {
+        make: 'vivo',
+        lensMake: 'ZEISS',
+        quickFilters: ['全部', 'X200系', 'X100系', 'S系列', '折叠屏'],
+        models: [
+          { name: 'vivo X200 Ultra', tag: 'X200系', main: { focal: 8.67, eq: 35, f: 1.69, label: 'ZEISS 35mm main camera 8.67mm f/1.69' }, wide: { focal: 2.35, eq: 14, f: 2.0, label: 'ZEISS ultra wide camera 2.35mm f/2.0' }, tele: { focal: 22.48, eq: 85, f: 2.27, label: 'ZEISS APO telephoto 22.48mm f/2.27' }, front: { focal: 2.8, eq: 20, f: 2.0, label: 'front camera 2.8mm f/2.0' } },
+          { name: 'vivo X200 Pro', tag: 'X200系', main: { focal: 7.45, eq: 23, f: 1.57, label: 'ZEISS main camera 7.45mm f/1.57' }, wide: { focal: 2.35, eq: 15, f: 2.0, label: 'ultra wide camera 2.35mm f/2.0' }, tele: { focal: 22.48, eq: 85, f: 2.67, label: 'ZEISS APO telephoto 22.48mm f/2.67' }, front: { focal: 2.8, eq: 20, f: 2.0, label: 'front camera 2.8mm f/2.0' } },
+          { name: 'vivo X200 Pro mini', tag: 'X200系', main: { focal: 7.45, eq: 23, f: 1.57, label: 'ZEISS main camera 7.45mm f/1.57' }, wide: { focal: 2.35, eq: 15, f: 2.0, label: 'ultra wide camera 2.35mm f/2.0' }, tele: { focal: 16.5, eq: 70, f: 2.57, label: 'ZEISS telephoto 16.5mm f/2.57' }, front: { focal: 2.8, eq: 20, f: 2.0, label: 'front camera 2.8mm f/2.0' } },
+          { name: 'vivo X100 Ultra', tag: 'X100系', main: { focal: 8.67, eq: 23, f: 1.75, label: 'ZEISS main camera 8.67mm f/1.75' }, wide: { focal: 2.3, eq: 14, f: 2.2, label: 'ultra wide camera 2.3mm f/2.2' }, tele: { focal: 22.48, eq: 85, f: 2.67, label: 'ZEISS telephoto 22.48mm f/2.67' }, front: { focal: 2.8, eq: 20, f: 2.0, label: 'front camera 2.8mm f/2.0' } },
+          { name: 'vivo S20 Pro', tag: 'S系列', main: { focal: 5.6, eq: 23, f: 1.88, label: 'back main camera 5.6mm f/1.88' }, wide: { focal: 2.2, eq: 15, f: 2.2, label: 'ultra wide camera 2.2mm f/2.2' }, tele: { focal: 11.2, eq: 50, f: 2.55, label: 'portrait telephoto 11.2mm f/2.55' }, front: { focal: 2.8, eq: 21, f: 2.0, label: 'front camera 2.8mm f/2.0' } },
+          { name: 'vivo X Fold3 Pro', tag: '折叠屏', main: { focal: 6.4, eq: 23, f: 1.68, label: 'ZEISS main camera 6.4mm f/1.68' }, wide: { focal: 2.3, eq: 15, f: 2.0, label: 'ultra wide camera 2.3mm f/2.0' }, tele: { focal: 16.5, eq: 70, f: 2.57, label: 'ZEISS telephoto 16.5mm f/2.57' }, front: { focal: 2.7, eq: 20, f: 2.4, label: 'front camera 2.7mm f/2.4' } }
+        ]
+      },
+      iQOO: {
+        make: 'vivo',
+        lensMake: 'iQOO',
+        quickFilters: ['全部', '数字旗舰', 'Neo系列'],
+        models: [
+          { name: 'iQOO 13', tag: '数字旗舰', main: { focal: 6.45, eq: 23, f: 1.88, label: 'back main camera 6.45mm f/1.88' }, wide: { focal: 2.3, eq: 15, f: 2.0, label: 'ultra wide camera 2.3mm f/2.0' }, tele: { focal: 11.5, eq: 50, f: 1.85, label: 'portrait telephoto 11.5mm f/1.85' }, front: { focal: 2.7, eq: 22, f: 2.45, label: 'front camera 2.7mm f/2.45' } },
+          { name: 'iQOO 12 Pro', tag: '数字旗舰', main: { focal: 6.45, eq: 23, f: 1.68, label: 'back main camera 6.45mm f/1.68' }, wide: { focal: 2.3, eq: 15, f: 2.0, label: 'ultra wide camera 2.3mm f/2.0' }, tele: { focal: 16.5, eq: 70, f: 2.57, label: 'telephoto camera 16.5mm f/2.57' }, front: { focal: 2.7, eq: 22, f: 2.45, label: 'front camera 2.7mm f/2.45' } },
+          { name: 'iQOO Neo10 Pro', tag: 'Neo系列', main: { focal: 5.58, eq: 23, f: 1.88, label: 'back main camera 5.58mm f/1.88' }, wide: { focal: 2.2, eq: 15, f: 2.2, label: 'ultra wide camera 2.2mm f/2.2' }, tele: { focal: 5.58, eq: 46, f: 1.88, label: 'back main camera 5.58mm f/1.88' }, front: { focal: 2.7, eq: 22, f: 2.45, label: 'front camera 2.7mm f/2.45' } }
+        ]
+      },
+      OPPO: {
+        make: 'OPPO',
+        lensMake: 'Hasselblad',
+        quickFilters: ['全部', 'Find X8', 'Find X7', 'Reno'],
+        models: [
+          { name: 'OPPO Find X8 Ultra', tag: 'Find X8', main: { focal: 8.67, eq: 23, f: 1.8, label: 'Hasselblad main camera 8.67mm f/1.8' }, wide: { focal: 2.3, eq: 15, f: 2.0, label: 'ultra wide camera 2.3mm f/2.0' }, tele: { focal: 16.8, eq: 70, f: 2.1, label: 'Hasselblad telephoto 16.8mm f/2.1' }, front: { focal: 2.8, eq: 21, f: 2.4, label: 'front camera 2.8mm f/2.4' } },
+          { name: 'OPPO Find X8 Pro', tag: 'Find X8', main: { focal: 6.95, eq: 23, f: 1.6, label: 'Hasselblad main camera 6.95mm f/1.6' }, wide: { focal: 2.3, eq: 15, f: 2.0, label: 'ultra wide camera 2.3mm f/2.0' }, tele: { focal: 16.8, eq: 73, f: 2.6, label: 'Hasselblad telephoto 16.8mm f/2.6' }, front: { focal: 2.8, eq: 21, f: 2.4, label: 'front camera 2.8mm f/2.4' } },
+          { name: 'OPPO Find X8', tag: 'Find X8', main: { focal: 6.45, eq: 24, f: 1.8, label: 'Hasselblad main camera 6.45mm f/1.8' }, wide: { focal: 2.3, eq: 15, f: 2.0, label: 'ultra wide camera 2.3mm f/2.0' }, tele: { focal: 16.8, eq: 73, f: 2.6, label: 'telephoto camera 16.8mm f/2.6' }, front: { focal: 2.8, eq: 21, f: 2.4, label: 'front camera 2.8mm f/2.4' } },
+          { name: 'OPPO Find X7 Ultra', tag: 'Find X7', main: { focal: 8.67, eq: 23, f: 1.8, label: 'Hasselblad main camera 8.67mm f/1.8' }, wide: { focal: 2.2, eq: 14, f: 2.0, label: 'ultra wide camera 2.2mm f/2.0' }, tele: { focal: 15.1, eq: 65, f: 2.6, label: 'Hasselblad telephoto 15.1mm f/2.6' }, front: { focal: 2.8, eq: 21, f: 2.4, label: 'front camera 2.8mm f/2.4' } },
+          { name: 'OPPO Reno13 Pro', tag: 'Reno', main: { focal: 5.6, eq: 24, f: 1.8, label: 'back main camera 5.6mm f/1.8' }, wide: { focal: 2.2, eq: 15, f: 2.2, label: 'ultra wide camera 2.2mm f/2.2' }, tele: { focal: 18.2, eq: 85, f: 2.8, label: 'telephoto camera 18.2mm f/2.8' }, front: { focal: 2.8, eq: 21, f: 2.0, label: 'front camera 2.8mm f/2.0' } }
+        ]
+      },
+      '一加': {
+        make: 'OnePlus',
+        lensMake: 'Hasselblad',
+        quickFilters: ['全部', '数字旗舰', 'Ace系列'],
+        models: [
+          { name: 'OnePlus 13', tag: '数字旗舰', main: { focal: 6.95, eq: 23, f: 1.6, label: 'Hasselblad main camera 6.95mm f/1.6' }, wide: { focal: 2.3, eq: 15, f: 2.0, label: 'ultra wide camera 2.3mm f/2.0' }, tele: { focal: 16.8, eq: 73, f: 2.6, label: 'telephoto camera 16.8mm f/2.6' }, front: { focal: 2.8, eq: 21, f: 2.4, label: 'front camera 2.8mm f/2.4' } },
+          { name: 'OnePlus 12', tag: '数字旗舰', main: { focal: 6.95, eq: 23, f: 1.6, label: 'Hasselblad main camera 6.95mm f/1.6' }, wide: { focal: 2.2, eq: 14, f: 2.2, label: 'ultra wide camera 2.2mm f/2.2' }, tele: { focal: 16.5, eq: 70, f: 2.6, label: 'telephoto camera 16.5mm f/2.6' }, front: { focal: 2.8, eq: 21, f: 2.4, label: 'front camera 2.8mm f/2.4' } },
+          { name: 'OnePlus Ace 5 Pro', tag: 'Ace系列', main: { focal: 5.58, eq: 24, f: 1.8, label: 'back main camera 5.58mm f/1.8' }, wide: { focal: 2.2, eq: 16, f: 2.2, label: 'ultra wide camera 2.2mm f/2.2' }, tele: { focal: 5.58, eq: 48, f: 1.8, label: 'back main camera 5.58mm f/1.8' }, front: { focal: 2.7, eq: 22, f: 2.4, label: 'front camera 2.7mm f/2.4' } }
+        ]
+      },
+      '小米': {
+        make: 'Xiaomi',
+        lensMake: 'LEICA',
+        quickFilters: ['全部', '15系', '14系', 'Redmi'],
+        models: [
+          { name: 'Xiaomi 15 Ultra', tag: '15系', main: { focal: 8.7, eq: 23, f: 1.63, label: 'LEICA main camera 8.7mm f/1.63' }, wide: { focal: 2.2, eq: 14, f: 2.2, label: 'LEICA ultra wide camera 2.2mm f/2.2' }, tele: { focal: 22.5, eq: 100, f: 2.6, label: 'LEICA telephoto camera 22.5mm f/2.6' }, front: { focal: 2.7, eq: 22, f: 2.0, label: 'front camera 2.7mm f/2.0' } },
+          { name: 'Xiaomi 15 Pro', tag: '15系', main: { focal: 7.1, eq: 23, f: 1.44, label: 'LEICA Summilux 7.1mm f/1.44' }, wide: { focal: 2.2, eq: 14, f: 2.2, label: 'LEICA ultra wide camera 2.2mm f/2.2' }, tele: { focal: 26.5, eq: 120, f: 2.5, label: 'LEICA telephoto camera 26.5mm f/2.5' }, front: { focal: 2.7, eq: 22, f: 2.0, label: 'front camera 2.7mm f/2.0' } },
+          { name: 'Xiaomi 15', tag: '15系', main: { focal: 6.45, eq: 23, f: 1.62, label: 'LEICA main camera 6.45mm f/1.62' }, wide: { focal: 2.2, eq: 14, f: 2.2, label: 'LEICA ultra wide camera 2.2mm f/2.2' }, tele: { focal: 13.5, eq: 60, f: 2.0, label: 'LEICA telephoto camera 13.5mm f/2.0' }, front: { focal: 2.7, eq: 22, f: 2.0, label: 'front camera 2.7mm f/2.0' } },
+          { name: 'Xiaomi 14 Ultra', tag: '14系', main: { focal: 8.7, eq: 23, f: 1.63, label: 'LEICA main camera 8.7mm f/1.63' }, wide: { focal: 2.0, eq: 12, f: 1.8, label: 'LEICA ultra wide camera 2.0mm f/1.8' }, tele: { focal: 16.5, eq: 75, f: 1.8, label: 'LEICA telephoto camera 16.5mm f/1.8' }, front: { focal: 2.7, eq: 22, f: 2.0, label: 'front camera 2.7mm f/2.0' } },
+          { name: 'Redmi K80 Pro', tag: 'Redmi', main: { focal: 5.6, eq: 24, f: 1.6, label: 'back main camera 5.6mm f/1.6' }, wide: { focal: 2.2, eq: 15, f: 2.2, label: 'ultra wide camera 2.2mm f/2.2' }, tele: { focal: 13.5, eq: 60, f: 2.0, label: 'telephoto camera 13.5mm f/2.0' }, front: { focal: 2.7, eq: 22, f: 2.2, label: 'front camera 2.7mm f/2.2' } }
+        ]
+      }
+    };
+
+    const HOT_CITIES = [
+      { name: '上海·外滩', lat: 31.239689, lng: 121.490655 },
+      { name: '北京·三里屯', lat: 39.936544, lng: 116.455132 },
+      { name: '广州·珠江新城', lat: 23.119428, lng: 113.321226 },
+      { name: '深圳·南山', lat: 22.533320, lng: 113.930410 },
+      { name: '成都·太古里', lat: 30.653789, lng: 104.081845 },
+      { name: '杭州·西湖', lat: 30.243056, lng: 120.148333 },
+      { name: '南京·新街口', lat: 32.041805, lng: 118.784134 },
+      { name: '重庆·洪崖洞', lat: 29.562135, lng: 106.579238 },
+      { name: '三亚·海棠湾', lat: 18.358211, lng: 109.736421 },
+      { name: '东京·涩谷', lat: 35.659482, lng: 139.700559 },
+      { name: '巴黎·埃菲尔铁塔', lat: 48.858370, lng: 2.294481 }
+    ];
+
+    // ==========================================
+    // 2. 全局应用状态
+    // ==========================================
+    let uploadedFiles = []; // { id, name, size, origType, jpegDataUrl }
+    let processedResults = []; // { name, dataUrl, summary }
+    let selectedBrand = 'Apple';
+    let selectedModelIndex = 2; // 默认指向 iPhone 17 Pro Max
+    let selectedLensKey = 'main';
+    let modelSearchKeyword = '';
+    let activeModelTag = '全部';
+    let editorMode = 'basic';
+    let mapInstance = null;
+    let mapMarker = null;
+
+    // ==========================================
+    // 3. 初始化页面与组件
+    // ==========================================
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      setCurrentDateTime();
+      renderBrandTabs();
+      renderQuickFilters();
+      renderModelGrid();
+      applyPresetToInputs();
+      renderCityPills();
+      initLeafletMap();
+      setupDragAndDrop();
+    });
+
+    function showToast(message) {
+      const box = document.getElementById('toast-box');
+      const msg = document.getElementById('toast-msg');
+      msg.textContent = message;
+      box.classList.remove('opacity-0');
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => {
+        box.classList.add('opacity-0');
+      }, 2400);
+    }
+
+    function setCurrentDateTime() {
+      const now = new Date();
+      const offset = now.getTimezoneOffset() * 60000;
+      const localISOTime = new Date(now - offset).toISOString().slice(0, 19);
+      document.getElementById('exif-datetime').value = localISOTime;
+    }
+
+    // ==========================================
+    // 4. 品牌、机型与镜头模板渲染逻辑
+    // ==========================================
+    function renderBrandTabs() {
+      const container = document.getElementById('brand-tabs');
+      container.innerHTML = Object.keys(DEVICE_PRESETS).map(brand => {
+        const isActive = brand === selectedBrand;
+        return `
+          <button onclick="selectBrand('${brand}')" class="px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition flex items-center gap-1.5 ${
+            isActive
+              ? 'btn-pink-gradient text-white shadow-sm'
+              : 'bg-gray-50 text-gray-600 border border-gray-200/80 hover:border-rose-300'
+          }">
+            ${brand === 'Apple' ? '<i data-lucide="apple" class="w-3.5 h-3.5"></i>' : ''}
+            <span>${brand}</span>
+          </button>
+        `;
+      }).join('');
+      lucide.createIcons();
+    }
+
+    function selectBrand(brand) {
+      selectedBrand = brand;
+      selectedModelIndex = 0;
+      selectedLensKey = 'main';
+      modelSearchKeyword = '';
+      activeModelTag = '全部';
+      const searchInput = document.getElementById('model-search-input');
+      const clearBtn = document.getElementById('model-search-clear');
+      if (searchInput) searchInput.value = '';
+      if (clearBtn) clearBtn.classList.add('hidden');
+      renderBrandTabs();
+      renderQuickFilters();
+      renderModelGrid();
+      applyPresetToInputs();
+    }
+
+    function renderQuickFilters() {
+      const container = document.getElementById('model-quick-filters');
+      if (!container) return;
+      const filters = DEVICE_PRESETS[selectedBrand].quickFilters || ['全部'];
+      container.innerHTML = filters.map(tag => {
+        const isActive = tag === activeModelTag;
+        return `
+          <button onclick="selectQuickFilter('${tag}')" class="px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
+            isActive
+              ? 'bg-rose-500 text-white shadow-xs'
+              : 'bg-gray-100/80 text-gray-500 hover:bg-rose-50 hover:text-rose-600'
+          }">
+            ${tag}
+          </button>
+        `;
+      }).join('');
+    }
+
+    function selectQuickFilter(tag) {
+      activeModelTag = tag;
+      renderQuickFilters();
+      renderModelGrid();
+    }
+
+    function handleModelSearch(val) {
+      modelSearchKeyword = val.trim().toLowerCase();
+      const clearBtn = document.getElementById('model-search-clear');
+      if (clearBtn) {
+        clearBtn.classList.toggle('hidden', modelSearchKeyword.length === 0);
+      }
+      renderModelGrid();
+    }
+
+    function clearModelSearch() {
+      modelSearchKeyword = '';
+      const searchInput = document.getElementById('model-search-input');
+      const clearBtn = document.getElementById('model-search-clear');
+      if (searchInput) searchInput.value = '';
+      if (clearBtn) clearBtn.classList.add('hidden');
+      renderModelGrid();
+    }
+
+    function renderModelGrid() {
+      const container = document.getElementById('model-grid');
+      const models = DEVICE_PRESETS[selectedBrand].models;
+
+      const filteredModels = models
+        .map((m, origIdx) => ({ ...m, origIdx }))
+        .filter(m => {
+          const matchTag = activeModelTag === '全部' || m.tag === activeModelTag;
+          const matchKeyword = !modelSearchKeyword || m.name.toLowerCase().includes(modelSearchKeyword);
+          return matchTag && matchKeyword;
+        });
+
+      if (filteredModels.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-2 py-6 text-center text-xs text-gray-400">
+            未找到匹配“${modelSearchKeyword}”的机型
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filteredModels.map(m => {
+        const isActive = m.origIdx === selectedModelIndex;
+        return `
+          <button onclick="selectModel(${m.origIdx})" class="px-2.5 py-2.5 rounded-xl text-xs font-semibold text-center truncate transition ${
+            isActive
+              ? 'btn-pink-gradient text-white shadow-sm'
+              : 'bg-gray-50/90 text-gray-700 border border-gray-200/80 hover:border-rose-300'
+          }">
+            ${m.name}
+          </button>
+        `;
+      }).join('');
+    }
+
+    function selectModel(idx) {
+      selectedModelIndex = idx;
+      renderModelGrid();
+      applyPresetToInputs();
+    }
+
+    function renderLensQuickButtons(modelObj) {
+      const lensDefs = [
+        { key: 'main', title: '主摄摄像头', icon: 'camera' },
+        { key: 'front', title: '前置摄像头', icon: 'user-square-2' },
+        { key: 'tele', title: '长焦摄像头', icon: 'zoom-in' },
+        { key: 'wide', title: '超广角镜头', icon: 'maximize-2' }
+      ];
+      const container = document.getElementById('lens-quick-grid');
+      container.innerHTML = lensDefs.map(item => {
+        const isActive = item.key === selectedLensKey;
+        return `
+          <button onclick="selectLens('${item.key}')" class="py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+            isActive
+              ? 'bg-rose-50 text-rose-600 border-2 border-rose-500 shadow-xs'
+              : 'bg-gray-50 text-gray-600 border border-gray-200/80 hover:bg-rose-50/40'
+          }">
+            <i data-lucide="${item.icon}" class="w-3.5 h-3.5 ${isActive ? 'text-rose-500' : 'text-gray-400'}"></i>
+            <span>${item.title}</span>
+          </button>
+        `;
+      }).join('');
+      lucide.createIcons();
+    }
+
+    function selectLens(key) {
+      selectedLensKey = key;
+      applyPresetToInputs();
+    }
+
+    function applyPresetToInputs() {
+      const brandObj = DEVICE_PRESETS[selectedBrand];
+      const modelObj = brandObj.models[selectedModelIndex];
+      const lensObj = modelObj[selectedLensKey];
+
+      document.getElementById('current-preset-label').textContent = modelObj.name;
+      document.getElementById('exif-make').value = brandObj.make;
+      document.getElementById('exif-model').value = modelObj.name;
+      document.getElementById('exif-lens-model').value = `${modelObj.name} ${lensObj.label}`;
+      document.getElementById('exif-focal').value = lensObj.focal;
+      document.getElementById('exif-focal-35').value = lensObj.eq;
+      document.getElementById('exif-fnumber').value = lensObj.f;
+
+      renderLensQuickButtons(modelObj);
+    }
+
+    function setEditorMode(mode) {
+      editorMode = mode;
+      const basicBtn = document.getElementById('mode-basic-btn');
+      const advBtn = document.getElementById('mode-adv-btn');
+      const advFields = document.getElementById('advanced-fields');
+
+      if (mode === 'basic') {
+        basicBtn.className = 'py-1.5 text-xs font-semibold rounded-lg btn-pink-gradient text-white shadow-sm transition';
+        advBtn.className = 'py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:text-rose-600 transition';
+        advFields.classList.add('hidden');
+      } else {
+        advBtn.className = 'py-1.5 text-xs font-semibold rounded-lg btn-pink-gradient text-white shadow-sm transition';
+        basicBtn.className = 'py-1.5 text-xs font-semibold rounded-lg text-gray-600 hover:text-rose-600 transition';
+        advFields.classList.remove('hidden');
+      }
+    }
+
+    function toggleSection(bodyId, chevronId) {
+      const body = document.getElementById(bodyId);
+      const chevron = document.getElementById(chevronId);
+      body.classList.toggle('hidden');
+      chevron.classList.toggle('rotate-180');
+      if (bodyId === 'gps-body' && !body.classList.contains('hidden') && mapInstance) {
+        setTimeout(() => mapInstance.invalidateSize(), 150);
+      }
+    }
+
+    function resetAllSettings() {
+      selectedBrand = 'Apple';
+      selectedModelIndex = 2;
+      selectedLensKey = 'main';
+      modelSearchKeyword = '';
+      activeModelTag = '全部';
+      const searchInput = document.getElementById('model-search-input');
+      const clearBtn = document.getElementById('model-search-clear');
+      if (searchInput) searchInput.value = '';
+      if (clearBtn) clearBtn.classList.add('hidden');
+      setCurrentDateTime();
+      renderBrandTabs();
+      renderQuickFilters();
+      renderModelGrid();
+      applyPresetToInputs();
+      selectCity(HOT_CITIES[5]); // 默认杭州西湖
+      showToast('已恢复默认相机参数');
+    }
+
+    // ==========================================
+    // 7. EXIF 编码与写入核心逻辑 (piexifjs 安全增强版)
+    // ==========================================
+    const MAX_UINT32 = 4294967295;
+
+    // 清洗 ASCII 字符串：piexifjs 对非 ASCII 字符（如中文、全角符号）写入会报错
+    function sanitizeAsciiString(str, fallback = '') {
+      if (typeof str !== 'string') return fallback;
+      const cleaned = str
+        .replace(/—|–/g, '-')
+        .replace(/[^\x20-\x7E]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return cleaned || fallback;
+    }
+
+    // 转换为安全正整数有理数 [num, den]，确保均 <= MAX_UINT32
+    function toSafeRational(value, scale = 100, fallbackNum = 1, fallbackDen = 100) {
+      const numVal = Number(value);
+      if (!Number.isFinite(numVal) || numVal <= 0) {
+        return [fallbackNum, fallbackDen];
+      }
+      const safeScale = Math.max(1, Math.min(1000000, Math.round(scale)));
+      let numerator = Math.round(numVal * safeScale);
+      let denominator = safeScale;
+
+      if (numerator < 1) numerator = 1;
+      if (numerator > MAX_UINT32) {
+        const ratio = numerator / MAX_UINT32;
+        numerator = MAX_UINT32;
+        denominator = Math.max(1, Math.round(denominator / ratio));
+      }
+      return [Math.round(numerator), Math.round(denominator)];
+    }
+
+    function degToDmsRational(degFloat) {
+      const absolute = Math.abs(Number(degFloat) || 0);
+      const degrees = Math.min(180, Math.floor(absolute));
+      const minutesNotTruncated = (absolute - degrees) * 60;
+      const minutes = Math.min(59, Math.floor(minutesNotTruncated));
+      const rawSeconds = Math.round((minutesNotTruncated - minutes) * 60 * 10000);
+      const seconds = Math.min(MAX_UINT32, Math.max(0, rawSeconds));
+      return [
+        [degrees, 1],
+        [minutes, 1],
+        [seconds, 10000]
+      ];
+    }
+
+    function formatExifDateTime(inputVal) {
+      // 标准 EXIF 格式：YYYY:MM:DD HH:MM:SS（兼容 YYYY/MM/DD HH:MM:SS 与 YYYY-MM-DDTHH:MM）
+      const pad = n => String(n).padStart(2, '0');
+      const nowFallback = () => {
+        const now = new Date();
+        return `${now.getFullYear()}:${pad(now.getMonth() + 1)}:${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      };
+
+      if (!inputVal || typeof inputVal !== 'string') {
+        return nowFallback();
+      }
+
+      const trimmed = inputVal.trim();
+      const match = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+      if (!match) {
+        return nowFallback();
+      }
+
+      const year = match[1];
+      const month = pad(Math.min(12, Math.max(1, parseInt(match[2], 10))));
+      const day = pad(Math.min(31, Math.max(1, parseInt(match[3], 10))));
+      const hour = pad(Math.min(23, Math.max(0, parseInt(match[4], 10))));
+      const minute = pad(Math.min(59, Math.max(0, parseInt(match[5], 10))));
+      const second = pad(Math.min(59, Math.max(0, parseInt(match[6] || '0', 10))));
+
+      return `${year}:${month}:${day} ${hour}:${minute}:${second}`;
+    }
+
+    function buildExifBinaryString() {
+      const rawMake = document.getElementById('exif-make').value;
+      const rawModel = document.getElementById('exif-model').value;
+      const rawLensModel = document.getElementById('exif-lens-model').value;
+
+      const make = sanitizeAsciiString(rawMake, 'Apple');
+      const model = sanitizeAsciiString(rawModel, 'iPhone 17 Pro Max');
+      const lensModel = sanitizeAsciiString(rawLensModel, `${model} back camera`);
+
+      const focal = parseFloat(document.getElementById('exif-focal').value);
+      const focal35Raw = parseInt(document.getElementById('exif-focal-35').value, 10);
+      const focal35 = Number.isFinite(focal35Raw) && focal35Raw > 0 ? Math.min(65535, focal35Raw) : 24;
+      const fNumber = parseFloat(document.getElementById('exif-fnumber').value);
+      const isoRaw = parseInt(document.getElementById('exif-iso').value, 10);
+      const iso = Number.isFinite(isoRaw) && isoRaw > 0 ? Math.min(65535, isoRaw) : 100;
+      const shutterRaw = parseInt(document.getElementById('exif-shutter').value, 10);
+      const shutter = Number.isFinite(shutterRaw) && shutterRaw > 0 ? Math.min(MAX_UINT32, shutterRaw) : 120;
+      const exifDateStr = formatExifDateTime(document.getElementById('exif-datetime').value);
+
+      const brandObj = DEVICE_PRESETS[selectedBrand];
+      const lensMake = sanitizeAsciiString(brandObj ? brandObj.lensMake : make, make);
+
+      // 0th IFD (基础相机信息)
+      const zeroth = {};
+      zeroth[piexif.ImageIFD.Make] = make;
+      zeroth[piexif.ImageIFD.Model] = model;
+      zeroth[piexif.ImageIFD.Software] = 'iOS 19.1';
+      zeroth[piexif.ImageIFD.DateTime] = exifDateStr;
+
+      // Exif IFD (镜头、焦距、光圈、快门、拍摄时间)
+      const exif = {};
+      exif[piexif.ExifIFD.DateTimeOriginal] = exifDateStr;
+      exif[piexif.ExifIFD.DateTimeDigitized] = exifDateStr;
+      exif[piexif.ExifIFD.LensMake] = lensMake;
+      exif[piexif.ExifIFD.LensModel] = lensModel;
+      exif[piexif.ExifIFD.FocalLength] = toSafeRational(focal, 100, 686, 100);
+      exif[piexif.ExifIFD.FocalLengthIn35mmFilm] = focal35;
+      exif[piexif.ExifIFD.FNumber] = toSafeRational(fNumber, 100, 178, 100);
+      exif[piexif.ExifIFD.ISOSpeedRatings] = iso;
+      exif[piexif.ExifIFD.ExposureTime] = [1, Math.max(1, shutter)];
+      exif[piexif.ExifIFD.ColorSpace] = 1; // sRGB
+
+      // GPS IFD (经纬度)
+      const gps = {};
+      const gpsEnabled = document.getElementById('gps-enabled').checked;
+      if (gpsEnabled) {
+        const lat = parseFloat(document.getElementById('gps-lat').value);
+        const lng = parseFloat(document.getElementById('gps-lng').value);
+        if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+          gps[piexif.GPSIFD.GPSLatitudeRef] = lat >= 0 ? 'N' : 'S';
+          gps[piexif.GPSIFD.GPSLatitude] = degToDmsRational(lat);
+          gps[piexif.GPSIFD.GPSLongitudeRef] = lng >= 0 ? 'E' : 'W';
+          gps[piexif.GPSIFD.GPSLongitude] = degToDmsRational(lng);
+          gps[piexif.GPSIFD.GPSAltitudeRef] = 0;
+          gps[piexif.GPSIFD.GPSAltitude] = [35, 1];
+        }
+      }
+
+      const exifObj = { '0th': zeroth, 'Exif': exif, 'GPS': gps };
+      return piexif.dump(exifObj);
+    }
+
+    function processAndExport() {
+      if (uploadedFiles.length === 0) {
+        showToast('请先上传至少一张图片！');
+        document.getElementById('drop-zone').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+
+      try {
+        const exifBytes = buildExifBinaryString();
+        const make = sanitizeAsciiString(document.getElementById('exif-make').value, 'Apple');
+        const model = sanitizeAsciiString(document.getElementById('exif-model').value, 'iPhone 17 Pro Max');
+        const focal35 = document.getElementById('exif-focal-35').value || 24;
+        const fNumber = document.getElementById('exif-fnumber').value || 1.78;
+        const dateTime = formatExifDateTime(document.getElementById('exif-datetime').value);
+        const gpsEnabled = document.getElementById('gps-enabled').checked;
+        const placeName = document.getElementById('selected-place-name').textContent;
+
+        processedResults = uploadedFiles.map(file => {
+          // 清除可能存在的旧 EXIF 后写入全新 EXIF
+          const cleanJpeg = piexif.remove(file.jpegDataUrl);
+          const newJpegDataUrl = piexif.insert(exifBytes, cleanJpeg);
+          return {
+            name: file.name,
+            dataUrl: newJpegDataUrl,
+            summary: {
+              device: `${make} ${model}`,
+              lens: `${focal35}mm · f/${fNumber}`,
+              time: dateTime,
+              gps: gpsEnabled ? placeName : '未写入定位'
+            }
+          };
+        });
+
+        document.getElementById('step-3-badge').className = 'flex items-center gap-1.5 text-rose-600 font-semibold';
+        openExportModal();
+      } catch (err) {
+        console.error('EXIF 写入异常:', err);
+        const detail = err && err.message ? ` (${err.message})` : '';
+        showToast(`EXIF 参数写入失败${detail}，请检查输入格式`);
+      }
+    }
+
+    // ==========================================
+    // 5. 图片选择、拖拽上传与转码逻辑
+    // ==========================================
+    function triggerFileSelect() {
+      const input = document.getElementById('file-input');
+      if (input) {
+        input.value = ''; // 重置 value，确保同一张图片可重复选择
+        input.click();
+      }
+    }
+
+    function handleFilesSelect(event) {
+      const files = event && event.target ? event.target.files : null;
+      if (files && files.length > 0) {
+        processIncomingFiles(files);
+      }
+      if (event && event.target) {
+        event.target.value = ''; // 选完立即清空，避免下次选同文件不触发 onchange
+      }
+    }
+
+    function setupDragAndDrop() {
+      const dropZone = document.getElementById('drop-zone');
+      if (!dropZone || dropZone.dataset.dndBound === '1') return;
+      dropZone.dataset.dndBound = '1';
+
+      ['dragenter', 'dragover'].forEach(evtName => {
+        dropZone.addEventListener(evtName, e => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.add('border-rose-500', 'bg-rose-100/60');
+        });
+      });
+
+      ['dragleave', 'drop'].forEach(evtName => {
+        dropZone.addEventListener(evtName, e => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.remove('border-rose-500', 'bg-rose-100/60');
+        });
+      });
+
+      dropZone.addEventListener('drop', e => {
+        const dt = e.dataTransfer;
+        if (dt && dt.files && dt.files.length > 0) {
+          processIncomingFiles(dt.files);
+        }
+      });
+    }
+
+    function isSupportedImageFile(file) {
+      if (!file) return false;
+      // 兼容部分手机浏览器/相册选取图片时 file.type 为空字符串的情况
+      if (file.type && file.type.startsWith('image/')) return true;
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic', 'heif', 'avif'].includes(ext);
+    }
+
+    async function processIncomingFiles(fileList) {
+      const files = Array.from(fileList).filter(isSupportedImageFile);
+      if (files.length === 0) {
+        showToast('请选择有效的图片文件 (JPG/PNG/WebP/相册图片)');
+        return;
+      }
+
+      showToast(`正在载入 ${files.length} 张图片...`);
+
+      for (const file of files) {
+        try {
+          const jpegDataUrl = await convertImageToJpegDataUrl(file);
+          const nameParts = file.name.split('.');
+          const origExt = nameParts.length > 1 ? nameParts.pop().toUpperCase() : 'IMG';
+          const baseName = file.name.replace(/\.[^/.]+$/, '') || `photo_${Date.now()}`;
+          uploadedFiles.push({
+            id: Date.now() + Math.random().toString(36).slice(2, 7),
+            name: `${baseName}.jpg`,
+            origName: file.name,
+            origType: origExt,
+            sizeText: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+            jpegDataUrl
+          });
+        } catch (err) {
+          console.error('图片转换失败:', err);
+          showToast(`图片 ${file.name} 格式暂不支持直接解码`);
+        }
+      }
+
+      updateUploadUI();
+    }
+
+    // 核心：利用 HTML5 Canvas 将 PNG/WebP 统一转为高质量 JPEG，确保 piexifjs 能写入完整相机与 GPS 元数据
+    function convertImageToJpegDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth || img.width;
+              canvas.height = img.naturalHeight || img.height;
+              const ctx = canvas.getContext('2d');
+              // 填充纯白底色防止透明 PNG 变黑
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              ctx.drawImage(img, 0, 0);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+              resolve(dataUrl);
+            } catch (canvasErr) {
+              reject(canvasErr);
+            }
+          };
+          img.onerror = reject;
+          img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function removeFile(id) {
+      uploadedFiles = uploadedFiles.filter(f => f.id !== id);
+      updateUploadUI();
+    }
+
+    function clearAllFiles() {
+      if (uploadedFiles.length === 0) {
+        showToast('当前没有已选图片');
+        return;
+      }
+      uploadedFiles = [];
+      const input = document.getElementById('file-input');
+      if (input) input.value = '';
+      updateUploadUI();
+      showToast('已清空所有图片');
+    }
+
+    function updateUploadUI() {
+      const dropZone = document.getElementById('drop-zone');
+      const grid = document.getElementById('preview-grid');
+      const title = document.getElementById('file-count-title');
+      const exportBtnText = document.getElementById('export-btn-text');
+      const step1 = document.getElementById('step-1-badge');
+      const step2 = document.getElementById('step-2-badge');
+
+      if (uploadedFiles.length === 0) {
+        dropZone.classList.remove('hidden');
+        grid.classList.add('hidden');
+        grid.innerHTML = '';
+        title.textContent = '请选择需要修改的图片';
+        exportBtnText.textContent = '导出图片';
+        step1.className = 'flex items-center gap-1.5 text-rose-600 font-semibold';
+        step2.className = 'flex items-center gap-1.5 text-gray-500';
+      } else {
+        dropZone.classList.add('hidden');
+        grid.classList.remove('hidden');
+        title.textContent = `已选择 ${uploadedFiles.length} 个文件`;
+        exportBtnText.textContent = `一键导出 (${uploadedFiles.length}张)`;
+        step2.className = 'flex items-center gap-1.5 text-rose-600 font-semibold';
+
+        grid.innerHTML = uploadedFiles.map(file => `
+          <div class="relative group rounded-xl overflow-hidden bg-gray-100 aspect-square border border-rose-100 shadow-xs">
+            <img src="${file.jpegDataUrl}" alt="${file.origName}" class="w-full h-full object-cover" />
+            <button onclick="removeFile('${file.id}')" class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-rose-500/90 text-white flex items-center justify-center shadow-sm active:scale-90 transition">
+              <i data-lucide="x" class="w-3.5 h-3.5"></i>
+            </button>
+            <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 via-black/40 to-transparent p-1.5">
+              <p class="text-[10px] text-white font-medium truncate">${file.origName}</p>
+              <span class="inline-block text-[9px] text-rose-200 font-mono">${file.origType} → JPEG</span>
+            </div>
+          </div>
+        `).join('');
+        lucide.createIcons();
+      }
+    }
+
+    // ==========================================
+    // 6. Leaflet 交互式地图与地点搜索
+    // ==========================================
+    function initLeafletMap() {
+      const defaultCity = HOT_CITIES[5]; // 杭州西湖
+      mapInstance = L.map('gps-map', {
+        center: [defaultCity.lat, defaultCity.lng],
+        zoom: 14,
+        zoomControl: true
+      });
+
+      // 使用高德/Carto 清晰底图
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap &copy; CARTO'
+      }).addTo(mapInstance);
+
+      // 自定义粉色水滴图钉
+      const pinkPinIcon = L.divIcon({
+        className: 'custom-pink-pin',
+        html: `<div style="width:28px;height:28px;background:#f43f72;border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 4px 10px rgba(244,63,114,0.5);"></div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 28]
+      });
+
+      mapMarker = L.marker([defaultCity.lat, defaultCity.lng], {
+        draggable: true,
+        icon: pinkPinIcon
+      }).addTo(mapInstance);
+
+      // 点击地图更新坐标
+      mapInstance.on('click', e => {
+        setCoordinates(e.latlng.lat, e.latlng.lng, '地图自定义选点');
+      });
+
+      // 拖动图钉更新坐标
+      mapMarker.on('dragend', () => {
+        const pos = mapMarker.getLatLng();
+        setCoordinates(pos.lat, pos.lng, '地图自定义选点');
+      });
+    }
+
+    function renderCityPills() {
+      const container = document.getElementById('city-pills');
+      container.innerHTML = HOT_CITIES.map((city, idx) => `
+        <button onclick="selectCityByIndex(${idx})" class="px-2.5 py-1 rounded-lg bg-gray-50 hover:bg-rose-50 text-gray-600 hover:text-rose-600 border border-gray-200/80 hover:border-rose-200 text-xs font-medium transition">
+          ${city.name}
+        </button>
+      `).join('');
+    }
+
+    function selectCityByIndex(idx) {
+      selectCity(HOT_CITIES[idx]);
+    }
+
+    function selectCity(city) {
+      setCoordinates(city.lat, city.lng, city.name);
+      if (mapInstance) {
+        mapInstance.setView([city.lat, city.lng], 15);
+      }
+    }
+
+    function setCoordinates(lat, lng, label) {
+      const fixedLat = Number(lat).toFixed(6);
+      const fixedLng = Number(lng).toFixed(6);
+      document.getElementById('gps-lat').value = fixedLat;
+      document.getElementById('gps-lng').value = fixedLng;
+      if (label) {
+        document.getElementById('selected-place-name').textContent = label;
+      }
+      if (mapMarker) {
+        mapMarker.setLatLng([fixedLat, fixedLng]);
+      }
+    }
+
+    function updateMapFromInputs() {
+      const lat = parseFloat(document.getElementById('gps-lat').value);
+      const lng = parseFloat(document.getElementById('gps-lng').value);
+      if (!isNaN(lat) && !isNaN(lng) && mapInstance && mapMarker) {
+        mapMarker.setLatLng([lat, lng]);
+        mapInstance.setView([lat, lng], 15);
+        document.getElementById('selected-place-name').textContent = '手动输入坐标';
+      }
+    }
+
+    async function searchLocation() {
+      const query = document.getElementById('gps-search-input').value.trim();
+      if (!query) {
+        showToast('请输入要搜索的地点名称');
+        return;
+      }
+      const btn = document.getElementById('gps-search-btn');
+      btn.textContent = '搜索中...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`);
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const item = data[0];
+          const shortName = item.display_name.split(',')[0];
+          setCoordinates(item.lat, item.lon, shortName);
+          mapInstance.setView([item.lat, item.lon], 15);
+          showToast(`已定位到：${shortName}`);
+        } else {
+          showToast('未找到该地点，请尝试更具体的关键词');
+        }
+      } catch (e) {
+        showToast('网络搜索受限，请直接点击地图或选择热门城市');
+      } finally {
+        btn.textContent = '搜索';
+        btn.disabled = false;
+      }
+    }
+
+    function toggleGpsEnabled() {
+      const enabled = document.getElementById('gps-enabled').checked;
+      document.getElementById('gps-status-text').textContent = enabled ? '写入定位' : '不写定位';
+    }
+
+    // ==========================================
+    // 8. 导出弹窗与下载逻辑
+    // ==========================================
+    function openExportModal() {
+      const modal = document.getElementById('export-modal');
+      const list = document.getElementById('export-list');
+      document.getElementById('modal-count').textContent = processedResults.length;
+
+      list.innerHTML = processedResults.map((item, index) => `
+        <div class="bg-gray-50/90 rounded-2xl p-3 border border-gray-200/80 space-y-2.5">
+          <div class="relative rounded-xl overflow-hidden bg-white border border-gray-100">
+            <img src="${item.dataUrl}" alt="${item.name}" class="w-full max-h-72 object-contain mx-auto" />
+          </div>
+
+          <!-- 已写入元数据摘要标签 -->
+          <div class="grid grid-cols-2 gap-1.5 text-[11px] bg-white p-2.5 rounded-xl border border-rose-100/80">
+            <div class="flex items-center gap-1.5 text-gray-700 truncate">
+              <i data-lucide="smartphone" class="w-3.5 h-3.5 text-rose-500 shrink-0"></i>
+              <span class="truncate font-semibold">${item.summary.device}</span>
+            </div>
+            <div class="flex items-center gap-1.5 text-gray-700 truncate">
+              <i data-lucide="aperture" class="w-3.5 h-3.5 text-rose-500 shrink-0"></i>
+              <span class="truncate">${item.summary.lens}</span>
+            </div>
+            <div class="flex items-center gap-1.5 text-gray-600 truncate">
+              <i data-lucide="clock" class="w-3.5 h-3.5 text-rose-400 shrink-0"></i>
+              <span class="truncate">${item.summary.time}</span>
+            </div>
+            <div class="flex items-center gap-1.5 text-gray-600 truncate">
+              <i data-lucide="map-pin" class="w-3.5 h-3.5 text-rose-400 shrink-0"></i>
+              <span class="truncate">${item.summary.gps}</span>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between pt-0.5">
+            <div>
+              <p class="text-xs font-bold text-gray-800 truncate max-w-[190px]">${item.name}</p>
+              <p class="text-[10px] text-gray-400">长按图片保存 / 点击右侧直接下载</p>
+            </div>
+            <button onclick="downloadSingleImage(${index})" class="px-4 py-2 rounded-xl btn-pink-gradient text-white text-xs font-bold shadow-sm active:scale-95 transition">
+              下载原图
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+      lucide.createIcons();
+      modal.classList.remove('hidden');
+    }
+
+    function closeExportModal() {
+      document.getElementById('export-modal').classList.add('hidden');
+    }
+
+    function dataUrlToBlob(dataUrl) {
+      const arr = dataUrl.split(',');
+      const mime = arr[0].match(/:(.*?);/)[1];
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      return new Blob([u8arr], { type: mime });
+    }
+
+    function downloadSingleImage(index) {
+      const item = processedResults[index];
+      if (!item) return;
+      const blob = dataUrlToBlob(item.dataUrl);
+      saveAs(blob, item.name);
+      showToast('已触发浏览器下载');
+    }
+
+    async function downloadAllAsZip() {
+      if (processedResults.length === 0) return;
+      const btn = document.getElementById('zip-download-btn');
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = '正在打包压缩...';
+      btn.disabled = true;
+
+      try {
+        const zip = new JSZip();
+        const usedNames = new Map();
+        processedResults.forEach(item => {
+          const base64Data = item.dataUrl.split(',')[1];
+          // 保持原文件名，仅当同一批次存在重名文件时自动添加 (1)、(2) 避免覆盖
+          let fileName = item.name;
+          if (usedNames.has(fileName)) {
+            const count = usedNames.get(fileName) + 1;
+            usedNames.set(fileName, count);
+            const dotIdx = fileName.lastIndexOf('.');
+            fileName = dotIdx !== -1
+              ? `${fileName.slice(0, dotIdx)}(${count})${fileName.slice(dotIdx)}`
+              : `${fileName}(${count})`;
+          } else {
+            usedNames.set(fileName, 0);
+          }
+          zip.file(fileName, base64Data, { base64: true });
+        });
+        const content = await zip.generateAsync({ type: 'blob' });
+        saveAs(content, `EXIF原图导出_${Date.now()}.zip`);
+        showToast('ZIP 压缩包已生成并开始下载');
+      } catch (err) {
+        console.error('打包失败:', err);
+        showToast('打包失败，请尝试单张下载');
+      } finally {
+        btn.innerHTML = origHtml;
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
